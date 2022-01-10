@@ -1,0 +1,53 @@
+import com.couchbase.client.core.deps.io.netty.handler.ssl.util.InsecureTrustManagerFactory;
+import com.couchbase.client.core.env.SecurityConfig;
+import com.couchbase.client.java.Bucket;
+import com.couchbase.client.java.Cluster;
+import com.couchbase.client.java.ClusterOptions;
+import com.couchbase.client.java.env.ClusterEnvironment;
+
+import java.time.Duration;
+import java.util.Collection;
+
+public class cb_demo_3 {
+
+    public static void main(String[] args) {
+
+        String endpoint = "localhost";
+        String username = "Administrator";
+        String password = "password";
+        String bucketName = "test";
+
+        ClusterEnvironment env = ClusterEnvironment.builder()
+                .securityConfig(SecurityConfig.enableTls(true)
+                .trustManagerFactory(InsecureTrustManagerFactory.INSTANCE))
+                .build();
+
+        /*Set<SeedNode> seedNodes = new HashSet<>(Arrays.asList(
+                SeedNode.create("localhost",
+                        Optional.of(32667),
+                        Optional.of(30303))));*/
+
+        // Create a cluster using the environment's custom client settings.
+        //Cluster cluster = Cluster.connect("localhost", "Administrator", "password");
+        /*Cluster cluster = Cluster.connect(seedNodes, ClusterOptions
+                .clusterOptions("Administrator", "password")
+                .environment(env));*/
+
+        Cluster cluster = Cluster.connect(endpoint,
+                ClusterOptions.clusterOptions(username, password).environment(env));
+
+        Bucket bucket = cluster.bucket(bucketName);
+        Collection collection = bucket.defaultCollection();
+
+
+        cluster.waitUntilReady(Duration.ofSeconds(30));
+        //collection.upsert("test", JsonObject.create().put("test","testing"));
+
+
+        cluster.disconnect();
+        env.shutdown();
+
+
+    }
+
+}
