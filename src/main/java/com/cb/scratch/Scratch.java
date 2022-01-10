@@ -2,6 +2,7 @@ package com.cb.scratch;
 
 import com.couchbase.client.core.env.*;
 import com.couchbase.client.core.error.CouchbaseException;
+import com.couchbase.client.core.error.subdoc.PathExistsException;
 import com.couchbase.client.java.Bucket;
 import com.couchbase.client.java.Cluster;
 import com.couchbase.client.java.ClusterOptions;
@@ -21,62 +22,62 @@ import com.couchbase.client.java.search.result.SearchRow;
 import com.couchbase.client.java.search.result.SearchRowLocations;
 
 import java.time.Duration;
-import java.util.List;
-import java.util.Map;
-import java.util.TreeMap;
+import java.util.*;
 
+import static com.couchbase.client.java.kv.MutateInSpec.arrayAddUnique;
 import static com.couchbase.client.java.query.QueryOptions.queryOptions;
 
 public class Scratch {
 
     public static void main(String[] args) {
 
-        ThresholdRequestTracerConfig.Builder config = ThresholdRequestTracerConfig.builder()
-                .emitInterval(Duration.ofSeconds(600))
-                .kvThreshold(Duration.ofMillis(1))
-                .queryThreshold(Duration.ofSeconds(1))
-                .searchThreshold(Duration.ofSeconds(1))
-                .analyticsThreshold(Duration.ofSeconds(1))
-                .sampleSize(1); //Default 10
-
-        OrphanReporterConfig.Builder orphCfg = OrphanReporterConfig.builder()
-                .emitInterval(Duration.ofSeconds(10))
-                .sampleSize(10)
-                .enabled(true);
-
-        ClusterEnvironment environment = ClusterEnvironment.builder()
-                .thresholdRequestTracerConfig(config)
-                .orphanReporterConfig(orphCfg)
-                //.timeoutConfig(TimeoutConfig.kvTimeout(Duration.ofMillis(3)))
-                //Developer Preview
-                .aggregatingMeterConfig(AggregatingMeterConfig.enabled(true)
-                        .emitInterval(Duration.ofSeconds(10))) //Default 10 Minutes
-                .build();
+//        ThresholdRequestTracerConfig.Builder config = ThresholdRequestTracerConfig.builder()
+//                .emitInterval(Duration.ofSeconds(600))
+//                .kvThreshold(Duration.ofMillis(1))
+//                .queryThreshold(Duration.ofSeconds(1))
+//                .searchThreshold(Duration.ofSeconds(1))
+//                .analyticsThreshold(Duration.ofSeconds(1))
+//                .sampleSize(1); //Default 10
+//
+//        OrphanReporterConfig.Builder orphCfg = OrphanReporterConfig.builder()
+//                .emitInterval(Duration.ofSeconds(10))
+//                .sampleSize(10)
+//                .enabled(true);
+//
+//        ClusterEnvironment environment = ClusterEnvironment.builder()
+//                .thresholdRequestTracerConfig(config)
+//                .orphanReporterConfig(orphCfg)
+//                //.timeoutConfig(TimeoutConfig.kvTimeout(Duration.ofMillis(3)))
+//                //Developer Preview
+//                .aggregatingMeterConfig(AggregatingMeterConfig.enabled(true)
+//                        .emitInterval(Duration.ofSeconds(10))) //Default 10 Minutes
+//                .build();
 
         Cluster cluster = Cluster.connect("localhost", ClusterOptions
                 .clusterOptions("Administrator", "password")
-                .environment(environment)
         );
-        Bucket bucket = cluster.bucket("travel-sample");
+        Bucket bucket = cluster.bucket("test");
         bucket.waitUntilReady(Duration.ofSeconds(10L));
         Collection collection = bucket.defaultCollection();
 
-        for (int i =0; i< 20000; i++) {
-            try {
-                GetResult result = collection.get("airline_10");
-            } catch (CouchbaseException ex) {
-                //Suppress all Couchbase Exceptions
-                //throw ex;
-            }
+        try {
+            collection.mutateIn("u:king_arthur",
+                    Arrays.asList(arrayAddUnique("ids","nid5"),
+                            arrayAddUnique("ids","nid4")
+                    ));
+        } catch (PathExistsException err) {
+            System.out.println("arrayUnique: caught exception, path already exists");
+            String msg = err.getMessage();
+            String index = msg.substring(
+                    msg.indexOf("index")+7, //add the length of index":
+                    msg.indexOf(",", msg.indexOf("index")+7)
+            );
+            System.out.println("Index = " + index);
         }
-
-        //doFtsSearch(cluster, "ishmael");
-        //doN1QLSearch(cluster);
-        //doFTSN1qlSearch(cluster);
 
         //Graceful Shut down
         cluster.disconnect();
-        environment.shutdown();
+        //environment.shutdown();
     }
 
     public static void doFtsSearch(Cluster cluster, String term) {
