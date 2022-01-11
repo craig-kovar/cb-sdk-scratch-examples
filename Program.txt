@@ -1,0 +1,195 @@
+﻿using System;
+using System.Threading.Tasks;
+using System.Collections.Generic;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using Newtonsoft;
+using Couchbase;
+using Couchbase.KeyValue;
+using System.Text;
+using Couchbase.Core.IO.Transcoders;
+using Couchbase.Transactions;
+using Couchbase.Transactions.Config;
+using Couchbase.Transactions.Deferred;
+using Couchbase.Transactions.Error;
+using Couchbase.Core.Retry;
+using Couchbase.Core.Exceptions;
+using Couchbase.Query;
+
+namespace sdk2to3
+{
+
+    class Program
+    {
+        static UpsertOptions options = new UpsertOptions().Timeout(TimeSpan.FromSeconds(5));
+
+        static async Task Main(string[] args)
+        {
+            Console.WriteLine("Starting 3.X Demo");
+
+            var cluster = await Cluster.ConnectAsync("couchbase://localhost", 
+                "Administrator", "password");
+            var bucket = await cluster.BucketAsync("demo");
+    
+            await bucket.WaitUntilReadyAsync(TimeSpan.FromSeconds(10));
+            var collection = bucket.DefaultCollection();
+        
+
+            //Custom defined Retry Strategy to throw IndexNotFoundException
+            //if the prepared statement is missing
+            MyRetry retry = new MyRetry();
+            
+            //Query Options to use custom retry strategy and auto_execute the
+            //statement after it is prepared
+            QueryOptions options = new QueryOptions();
+            options.RetryStrategy(retry);
+            options.Raw("auto_execute",true);
+            //options.Readonly(true);
+
+            String name = "test";
+            String statement = "select * from `travel-sample` where type=$type and id = $id";
+            
+            Dictionary<string, object> myParams = new Dictionary<string, object>()
+            {
+                { "type", "landmark" },
+                { "id", 10019}
+            };
+
+
+            try {
+                await doQuery(cluster,name, statement, myParams, options);
+                //await forceError(collection);
+                //Console.WriteLine("test");
+            } catch (CouchbaseException ex) {
+                Console.WriteLine(ex);
+            }
+
+            await cluster.DisposeAsync();
+            
+        }
+
+        public static async Task doQuery(ICluster cluster, String name,
+        String statement, Dictionary<String,Object> myParams, QueryOptions options) {
+
+            string executeStatement = "execute {0}";
+            string prepareStatement = "prepare {0} as {1}";
+            string deleteStatement = "delete from system:prepareds where name = \"{0}\"";
+
+            Console.WriteLine("Starting query test"); 
+            decimal startTime =  DateTime.Now.Ticks / (decimal)TimeSpan.TicksPerMillisecond;
+
+            IQueryResult<dynamic> resultDynamic = null;
+                    
+            //Build Parameters
+            foreach(var item in myParams)
+            {
+                options.Parameter(item.Key,item.Value);
+            }
+
+            try {
+                resultDynamic = await cluster.QueryAsync<dynamic>(
+                    String.Format(executeStatement,name), options
+                );
+
+                // resultDynamic = await cluster.QueryAsync<dynamic>(
+                //     String.Format(deleteStatement,name), options
+                // );
+                
+            } catch (IndexNotFoundException ex) {
+                //Write your own logging message here
+                Console.WriteLine("Got into catch block " + ex.GetType());
+
+                //Try deleting prepared statement just in case
+                resultDynamic = await cluster.QueryAsync<dynamic>(
+                    String.Format(deleteStatement,name), options
+                );
+
+                //Prepare and auto_execute the statement
+                resultDynamic = await cluster.QueryAsync<dynamic>(
+                    String.Format(prepareStatement,name,statement),
+                    options
+                );
+            }
+
+            IAsyncEnumerable<dynamic> dynamicRows = resultDynamic.Rows;
+            await foreach (var row in dynamicRows)
+            {
+                Console.WriteLine(row);
+            }
+
+            decimal stopTime = DateTime.Now.Ticks / (decimal) TimeSpan.TicksPerMillisecond;
+            decimal diff = stopTime - startTime;
+            Console.WriteLine("Query test took " + diff + " ms");
+        }
+
+        public static async Task forceError(ICouchbaseCollection collection) {
+            IRetryStrategy retry = new BestEffortRetryStrategy();
+            var result = await collection.GetAsync("string-key", 
+            options =>
+            {
+                options.RetryStrategy(retry);
+            });
+            var content = result.ContentAs<String>();
+
+            Console.WriteLine(content);
+        }
+
+        public static async Task doBinaryPut(ICouchbaseCollection collection, string input) {
+            await collection.UpsertAsync("test", Encoding.UTF8.GetBytes(input), 
+                options => options.Transcoder(new RawBinaryTranscoder()));
+        }
+
+        public static async Task doTxn(Transactions cbTxn, ICouchbaseCollection hl7, ICouchbaseCollection fhir, string input) {
+            JObject hl7Object = new JObject();
+            JObject fhirObject = new JObject();
+            JProperty fhirProp = new JProperty("input", input);
+            JProperty hl7Prop = new JProperty("input", 
+                System.Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(input)));
+            
+            fhirObject.Add(fhirProp);
+            fhirObject.Add("hl7doc", "hl71");
+            hl7Object.Add(hl7Prop);
+
+            try
+            {
+                var result = await cbTxn.RunAsync(async (ctx) => 
+                {
+                    await ctx.InsertAsync(hl7, "hl71", hl7Object);
+                    await ctx.InsertAsync(fhir, "fhir1", fhirObject);
+                }).ConfigureAwait(false);
+            }
+            catch (TransactionFailedException e)
+            {
+                Console.WriteLine(e);
+            }
+        }
+
+        public static async Task doTxnPause(Transactions cbTxn, ICouchbaseCollection hl7, ICouchbaseCollection fhir, string input) {
+        
+            JProperty fhirProp = new JProperty("secondInput", input);
+
+            try
+            {
+                var result = await cbTxn.RunAsync(async (ctx) => 
+                {
+                    var docOpt = await ctx.GetAsync(fhir,"fhir1").ConfigureAwait(false);
+                    var content = docOpt.ContentAs<dynamic>();
+                    content.Add("transactions", "are awesome");
+                    await ctx.ReplaceAsync(docOpt, content);
+
+                    Console.WriteLine("Pausing, hit any key to continue...");
+                    Console.ReadKey(true);
+                }).ConfigureAwait(false);
+            }
+            catch (TransactionFailedException e)
+            {
+                Console.WriteLine(e);
+            }
+        }
+    
+    }
+
+    
+}
